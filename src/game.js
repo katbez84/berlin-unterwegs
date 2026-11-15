@@ -14,11 +14,12 @@ const NN = M.nodes.length / 2;
 const NX = new Float32Array(NN), NY = new Float32Array(NN);
 for (let i = 0; i < NN; i++) { NX[i] = M.nodes[2 * i]; NY[i] = M.nodes[2 * i + 1]; }
 const adj = Array.from({ length: NN }, () => []);
+const edgeName = new Map(), ekey = (a, b) => (a < b ? a * NN + b : b * NN + a);
 const ways = M.ways.map(([c, n, p]) => {
   for (let i = 1; i < p.length; i++) {
     const a = p[i - 1], b = p[i]; if (a === b) continue;
     const d = DIST(NX[a], NY[a], NX[b], NY[b]);
-    adj[a].push(b, d); adj[b].push(a, d);
+    adj[a].push(b, d); adj[b].push(a, d); if (M.names[n]) edgeName.set(ekey(a, b), M.names[n]);
   }
   return { c, name: M.names[n], p };
 });
@@ -145,7 +146,7 @@ let save = { stars: {}, found: {}, words: {} };
 try { const s = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); if (s) save = Object.assign(save, s); } catch (e) {}
 const persist = () => { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) {} };
 
-const P = { x: 0, y: 0, at: { kind: 'street', node: 0 }, path: null, pathI: 0, pathT: 0, onArrive: null, train: null };
+const P = { straight: 0, street: null, x: 0, y: 0, at: { kind: 'street', node: 0 }, path: null, pathI: 0, pathT: 0, onArrive: null, train: null };
 const S = { mode: 'title', day: 1, min: 600, temp: 4, rain: false, warmth: 100, mission: null, visited: new Set(), started: 0, paused: 0, hint: null, hintUsed: false, real: null, sheetFor: null };
 
 // ------------------------------------------------------------------ canvas + view
@@ -357,7 +358,7 @@ function walkTo(target, onArrive) {
   P.at = { kind: 'street', node: start };
   P.path = path; P.pathI = 0; P.pathSeg = 0; P.onArrive = onArrive;
   // start from the current position toward first node
-  P.legFrom = [P.x, P.y]; V.follow = true; S.hint = S.hint; showMissionSheet();
+  P.legFrom = [P.x, P.y]; V.follow = true; P.street = null; atNode(0); learn('zu Fuß'); showMissionSheet();
 }
 function stepWalk(dtReal) {
   const speed = 140 * dtReal; // world meters per real second
@@ -366,10 +367,26 @@ function stepWalk(dtReal) {
     const tgt = P.path[P.pathI + 1];
     if (tgt === undefined) { finishWalk(); break; }
     const tx = NX[tgt], ty = NY[tgt], d = DIST(P.x, P.y, tx, ty);
-    if (d <= remain) { P.x = tx; P.y = ty; remain -= d; P.pathI++; walkedMeters(d); P.at = { kind: 'street', node: tgt }; }
+    if (d <= remain) { P.x = tx; P.y = ty; remain -= d; P.pathI++; walkedMeters(d); P.at = { kind: 'street', node: tgt }; atNode(P.pathI); }
     else { P.x += (tx - P.x) / d * remain; P.y += (ty - P.y) / d * remain; walkedMeters(remain); remain = 0; }
   }
 }
+function atNode(i) {
+  const path = P.path; if (!path) return;
+  const n = path[i], nx = path[i + 1], pv = path[i - 1];
+  if (nx !== undefined) { const nm = edgeName.get(ekey(n, nx)) || '';
+    if (nm && nm !== P.street) { P.street = nm; showStreetSign(nm); const low = nm.toLowerCase();
+      for (const [suf, w] of STREET_WORDS) if (low.endsWith(suf) || low.includes(suf + ' ')) { learn(w); break; }
+      if (/^neue[rsnm]? /i.test(nm)) learn('neu'); if (/^alte[rsnm]? |^alt-/i.test(nm)) learn('alt'); } }
+  if (pv !== undefined && nx !== undefined && adj[n].length >= 6) {
+    const a1 = Math.atan2(NY[n] - NY[pv], NX[n] - NX[pv]), a2 = Math.atan2(NY[nx] - NY[n], NX[nx] - NX[n]);
+    let t = a2 - a1; while (t > Math.PI) t -= 2 * Math.PI; while (t < -Math.PI) t += 2 * Math.PI;
+    if (Math.abs(t) > 0.9) learn(t > 0 ? 'rechts' : 'links'); else if (Math.abs(t) < 0.25 && ++P.straight > 3) learn('geradeaus');
+  }
+}
+const signEl = document.getElementById('streetsign');
+function showStreetSign(nm) { if (!signEl) return; signEl.textContent = nm; signEl.hidden = false; }
+function hideStreetSign() { if (signEl) signEl.hidden = true; }
 function walkedMeters(m) {
   const mins = m / WALK; addMinutes(mins);
   const drain = (S.rain ? 1.15 : 0.7) + (isDark() ? 0.3 : 0) + (S.temp <= 2 ? 0.2 : 0);
@@ -381,22 +398,29 @@ function finishWalk() { const cb = P.onArrive; P.path = null; P.onArrive = null;
 // ------------------------------------------------------------------ time, warmth, words
 function addMinutes(m) { S.min += m; }
 function setWarmth(v) {
-  S.warmth = Math.max(0, Math.min(100, v));
+  const before = S.warmth; S.warmth = Math.max(0, Math.min(100, v));
+  if (S.mode === 'play') { if (S.warmth < 35 && before >= 35) learn('kalt'); if (S.warmth >= 100 && before < 60) learn('warm'); }
   if (S.warmth <= 0 && S.mode === 'play' && !S.coldShown) { S.coldShown = true; coldStop(); }
 }
 function coldStop() {
-  P.path = null; learn('Eine heiße Schokolade, bitte');
+  P.path = null; hideStreetSign(); learn('Eine heiße Schokolade, bitte'); learn('Bitte'); learn('Danke');
   sheet(`<div class="eyebrow">Too cold</div><h2>Brrr. Time to warm up</h2>
     <p>We’ve been walking in the cold for too long. We stop in a café for hot chocolate. That takes 20 minutes.</p>
     <p class="muted">Tip: in drizzle or after dark, take the U-Bahn or S-Bahn for longer trips. Trains are warm.</p>
     <div class="row"><button class="btn primary" id="cafeOk">Warm again, keep going</button></div>`);
   document.getElementById('cafeOk').onclick = () => { addMinutes(20); setWarmth(70); S.coldShown = false; showMissionSheet(); };
 }
+const wordQueue = [];
 function learn(word) {
   if (!WORDS[word] || save.words[word]) return; save.words[word] = true; persist();
-  const t = document.createElement('div'); t.className = 'toast word'; t.innerHTML = `New word: <b>${esc(word)}</b> = ${esc(WORDS[word][0])}`;
-  pushToast(t, 3800);
+  wordQueue.push(word); if (wordQueue.length === 1) showNextWord();
 }
+function showNextWord() {
+  const word = wordQueue[0]; if (!word) return;
+  const t = document.createElement('div'); t.className = 'toast word'; t.innerHTML = `New word: <b>${esc(word)}</b> = ${esc(WORDS[word][0])}`;
+  pushToast(t, 3600); setTimeout(() => { wordQueue.shift(); showNextWord(); }, 1900);
+}
+const learnNext = list => { const w = list.find(x => !save.words[x]); if (w) learn(w); };
 function toast(msg, ms = 2600) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; pushToast(t, ms); }
 function pushToast(el, ms) { const box = document.getElementById('toasts'); box.style.bottom = (sheetEl.hidden ? 20 : sheetEl.offsetHeight + 12) + 'px'; box.appendChild(el); while (box.children.length > 3) box.firstChild.remove(); setTimeout(() => el.remove(), ms); }
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -407,12 +431,14 @@ function visit(p, passing) {
   const first = !save.found[p.id]; save.found[p.id] = true; persist();
   if (first || (S.mission && S.mission.goal.includes(p.id))) toast(`${passing ? 'Passing' : 'Found'}: ${p.name}`);
   if (p.cat === 'market') learn('Weihnachtsmarkt');
+  (PLACE_WORDS[p.id] || []).forEach(learn);
   checkMission();
 }
-function arrivePlace(p) { visit(p, false); showPlaceCard(p, true); }
+function arrivePlace(p) { visit(p, false); if (p.id === 'A') { learn('Hallo'); learn('Tschüss'); } showPlaceCard(p, true); }
 function showPlaceCard(p, here) {
   const kids = p.cat === 'market' ? (marketOpen(p) ? `Open now until 22:00.` : (S.day < 1 ? 'Markets usually open on Monday 23 November. Check the dates before you go.' : `Opens at ${p.opens}:00, closes at 22:00.`))
     : p.cat === 'museum' ? (museumOpen() ? 'Open now (most museums open 10:00 to 18:00).' : 'Closed now. Most museums open 10:00 to 18:00.') : '';
+  if (p.cat === 'market' || p.cat === 'museum') learn((p.cat === 'market' ? marketOpen(p) : museumOpen()) ? 'geöffnet' : 'geschlossen');
   const canWarm = here && S.mode === 'play' && ((p.cat === 'market' && marketOpen(p)) || (p.cat === 'museum' && museumOpen()));
   sheet(`<div class="eyebrow">${{ home: 'Home base', friend: 'Friend', film: 'Film location', sight: 'Sight', museum: 'Museum', market: 'Christmas market' }[p.cat]} · ${esc(p.id)}</div>
     <h2>${esc(p.name)}</h2><div class="muted">${esc(p.de)}</div>
@@ -420,7 +446,7 @@ function showPlaceCard(p, here) {
     <div class="row">${canWarm ? `<button class="btn primary" id="goIn">${p.cat === 'market' ? 'Have a Kinderpunsch (20 min)' : 'Go inside (60 min)'}</button>` : ''}
     <button class="btn ${canWarm ? 'ghost' : 'primary'}" id="cardOk">${S.mode === 'play' ? 'Back to the map' : 'Close'}</button></div>`);
   if (canWarm) document.getElementById('goIn').onclick = () => { const m = p.cat === 'market' ? 20 : 60; addMinutes(m); S.paused += m; setWarmth(100);
-    if (p.cat === 'market') { learn('Kinderpunsch'); learn('Pfand'); } else learn('Eingang'); toast('Warm again'); showMissionSheet(); };
+    if (p.cat === 'market') { learn('Kinderpunsch'); learn('Bitte'); learn('Pfand'); learnNext(MARKET_FOODS); } else { learn('Eingang'); learn('Eintritt'); learn('Kasse'); } toast('Warm again'); showMissionSheet(); };
   document.getElementById('cardOk').onclick = () => S.mode === 'play' ? showMissionSheet() : (S.mode === 'real' ? realSheet() : hideSheet());
 }
 
@@ -435,6 +461,7 @@ function stationSheet() {
   const dirs = [];
   for (const { line: l, i } of s.lines) { if (i < l.stops.length - 1) dirs.push([l, 1]); if (i > 0) dirs.push([l, -1]); }
   dirs.sort((a, b) => a[0].ref.localeCompare(b[0].ref, 'en', { numeric: true }));
+  hideStreetSign(); learn('Linie');
   sheet(`<div class="sign">${kinds.map(k => `<span class="sym ${k.toLowerCase()}">${k}</span>`).join('')}<span>${esc(name)}</span></div>
     ${!s.onMap ? `<p class="muted">This station is outside our street map.</p>` : ''}
     ${scene ? `<button class="btn primary" id="sceneGo" style="margin:8px 0">Walk to ${esc(scene.name)} (${scene.scene.walk} min)</button>` : ''}
@@ -454,13 +481,14 @@ function doScene(p) {
   sheet(`<div class="eyebrow">${esc(p.scene.walk)} minutes on foot from ${esc(p.scene.station)}</div><h2>${esc(p.name)}</h2>
     <p>${esc(p.scene.text)}</p><p><b>Look for:</b> ${esc(p.look)}</p>
     <div class="row">${(p.cat === 'market' && marketOpen(p)) ? '<button class="btn primary" id="sceneWarm">Have a Kinderpunsch (20 min)</button>' : ''}<button class="btn ${p.cat === 'market' && marketOpen(p) ? 'ghost' : 'primary'}" id="sceneBack">Walk back to the station (${p.scene.walk} min)</button></div>`);
-  const wb = document.getElementById('sceneWarm'); if (wb) wb.onclick = () => { addMinutes(20); S.paused += 20; setWarmth(100); learn('Kinderpunsch'); wb.remove(); };
+  const wb = document.getElementById('sceneWarm'); if (wb) wb.onclick = () => { addMinutes(20); S.paused += 20; setWarmth(100); learn('Kinderpunsch'); learnNext(MARKET_FOODS); wb.remove(); };
   document.getElementById('sceneBack').onclick = () => { addMinutes(p.scene.walk); setWarmth(S.warmth - p.scene.walk * 0.8); if (S.mode === 'play' && !S.done) stationSheet(); };
 }
 function board(l, dir) {
+  hideStreetSign();
   const s = ST[P.at.st], i = s.lines.find(e => e.line === l).i;
   P.train = { line: l, dir, i, t: 0, wait: WAIT(l), getOff: false, phase: 'wait', stopT: 0 };
-  learn('Zurückbleiben, bitte!');
+  learn(l.kind === 'U' ? 'Zurückbleiben, bitte!' : 'Einsteigen, bitte');
   if (S.mission && S.mission.goal.length) { // gentle direction check: does riding on make the best remaining trip longer?
     const left = S.mission.goal.filter(g => !S.visited.has(g)); const li = LINES.indexOf(l);
     if (left.length && l.stops[i + dir]) { const here = bestPlan(stIndex[s.name], left).mins, on = bestPlan(lsBase[li] + i + dir, left).mins + segMinutes(l, Math.min(i, i + dir), Math.max(i, i + dir));
@@ -473,8 +501,9 @@ function rideSheet() {
   for (let k = T.i + T.dir, n = 0; k >= 0 && k < l.stops.length && n < 5; k += T.dir, n++) ahead.push(l.stops[k]);
   const offOK = next && (ST[next].onMap || sceneByStation[next] || true);
   sheet(`<div class="row"><span class="badge ${l.kind === 'S' ? 's' : ''}" style="background:${l.color}">${l.ref}</span><b>Richtung ${esc(lineTerm(l, T.dir))}</b></div>
-    <div class="display"><div class="small">${T.phase === 'wait' ? 'Next train in ' + Math.ceil(T.wait) + ' min' : (T.phase === 'stop' ? 'Now at' : 'Nächster Halt')}</div>
-    <div class="big">${esc(T.phase === 'stop' ? here : (T.phase === 'wait' ? here : next || here))}</div></div>
+    <div class="display"><div class="small">${T.phase === 'wait' ? 'Abfahrt in ' + Math.ceil(T.wait) + ' Min · next train in ' + Math.ceil(T.wait) + ' min' : (T.phase === 'stop' ? 'Now at' : 'Nächster Halt')}</div>
+    <div class="big">${esc(T.phase === 'stop' ? here : (T.phase === 'wait' ? here : next || here))}</div>
+    ${T.phase === 'move' && next ? `<div class="small">Ausstieg ${doorSide(next) ? 'links · doors on the left' : 'rechts · doors on the right'}</div>` : ''}</div>
     ${ahead.length ? `<div class="stops">Coming up: ${ahead.map((n, k) => k === 0 ? `<b>${esc(n)}</b>` : esc(n)).join(' · ')}</div>` : ''}
     ${T.wrongWay && T.phase !== 'wait' && T.i !== undefined ? '<p class="muted">Hmm. Our goal seems to be the other way. Check the Richtung: it names the last station the train goes to.</p>' : ''}
     <div class="row">${next && offOK ? `<button class="btn ${T.getOff ? '' : 'primary'}" id="offBtn">${T.getOff ? 'Getting off at ' + esc(next) + ' ✓' : 'Get off at ' + esc(next)}</button>` : ''}
@@ -482,12 +511,13 @@ function rideSheet() {
   const ob = document.getElementById('offBtn'); if (ob) ob.onclick = () => { T.getOff = !T.getOff; rideSheet(); };
   const oh = document.getElementById('offHere'); if (oh) oh.onclick = () => alight();
 }
+function doorSide(name) { let h = 0; for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) | 0; return (h & 1) === 0; }
 function stepTrain(dtReal) {
   const T = P.train, l = T.line;
-  if (T.phase === 'wait') { const dm = dtReal * 2.2; T.wait -= dm; addMinutes(dm); if (T.wait <= 0) { T.phase = 'move'; T.t = 0; learn('Nächster Halt'); rideSheet(); } else if (Math.ceil(T.wait + dm) !== Math.ceil(T.wait)) rideSheet(); return; }
+  if (T.phase === 'wait') { const dm = dtReal * 2.2; T.wait -= dm; addMinutes(dm); if (T.wait <= 0) { T.phase = 'move'; T.t = 0; learn('Abfahrt'); learn('Nächster Halt'); learn('Ausstieg links'); rideSheet(); } else if (Math.ceil(T.wait + dm) !== Math.ceil(T.wait)) rideSheet(); return; }
   if (T.phase === 'stop') { T.stopT -= dtReal; if (T.stopT <= 0) {
       if (T.getOff) return alight();
-      if (T.i + T.dir < 0 || T.i + T.dir >= l.stops.length) { toast('End of the line. Everyone off.'); return alight(); }
+      if (T.i + T.dir < 0 || T.i + T.dir >= l.stops.length) { toast('Endstation. Bitte alle aussteigen! (Last stop, everyone off.)'); learn('Endstation'); return alight(); }
       T.phase = 'move'; T.t = 0; rideSheet(); } return; }
   const a = ST[l.stops[T.i]], b = ST[l.stops[T.i + T.dir]]; const mins = segMinutes(l, Math.min(T.i, T.i + T.dir), Math.max(T.i, T.i + T.dir));
   const dur = Math.max(0.9, Math.min(3.2, mins * 0.55)); const dt = dtReal / dur; T.t = Math.min(1, T.t + dt); addMinutes(mins * dt); setWarmth(S.warmth + 2.5 * mins * dt);
@@ -496,7 +526,7 @@ function stepTrain(dtReal) {
     const atEnd = T.i + T.dir < 0 || T.i + T.dir >= l.stops.length; if (atEnd) T.stopT = 0.6;
     if (T.getOff) T.stopT = 0.5; rideSheet(); }
 }
-function alight() { const T = P.train, name = T.line.stops[T.i]; P.train = null;
+function alight() { const T = P.train, name = T.line.stops[T.i]; P.train = null; learn('aussteigen');
   if (ST[name].lines.length > 1) learn('Umsteigen');
   enterStation(name); }
 
@@ -510,7 +540,10 @@ function startMission(m) {
   else { const s = ST[m.start.station]; P.x = s.x; P.y = s.y; P.at = { kind: 'street', node: s.node }; P.x = NX[s.node]; P.y = NY[s.node]; }
   const plan = bestPlan(playerGraphNode(), m.goal); S.par = Math.max(4, plan.mins); S.started = S.min;
   V.x = P.x; V.y = P.y; V.s = 0.9; V.follow = true; labelsDirty = true;
-  hideOverlay(); m.words.slice(0, 2).forEach((w, k) => setTimeout(() => learn(w), 900 + k * 2600));
+  hideOverlay(); hideStreetSign();
+  const d0 = DAYS[m.day]; learn(m.time < 11 * 60 ? 'Guten Morgen' : m.time < d0.set ? 'Guten Tag' : 'Guten Abend'); learn('Uhr');
+  if (m.rain) learn('Nieselregen'); if (isDark()) learn('dunkel');
+  m.words.slice(0, 2).forEach(learn);
   sheet(`<div class="eyebrow">${esc(DAYS[m.day].label)} · ${fmt(m.time)} · ${m.temp} °C${m.rain ? ', drizzle' : ''}</div><h2>${esc(m.title)}</h2><p>${esc(m.story)}</p>
     <p class="muted">Tap the map, a place or a station to walk there. Pinch or use + and − to zoom.</p>
     <div class="row"><button class="btn primary" id="go">Let’s go</button></div>`);
@@ -518,14 +551,14 @@ function startMission(m) {
   updateHud();
 }
 function startExplore() {
-  S.mode = 'play'; S.mission = null; S.day = 1; S.min = 10 * 60; S.temp = 4; S.rain = false; S.warmth = 100; S.visited = new Set(['H']); S.hint = null; S.done = false;
+  hideStreetSign(); S.mode = 'play'; S.mission = null; S.day = 1; S.min = 10 * 60; S.temp = 4; S.rain = false; S.warmth = 100; S.visited = new Set(['H']); S.hint = null; S.done = false;
   const p = PL.H; P.at = { kind: 'street', node: p.node }; P.x = p.x; P.y = p.y; P.train = null; P.path = null;
   V.x = P.x; V.y = P.y; V.s = 0.7; labelsDirty = true; hideOverlay(); showMissionSheet(); updateHud();
 }
 function checkMission() {
   const m = S.mission; if (!m || S.done) return;
   if (!m.goal.every(g => S.visited.has(g))) { showMissionSheet(); return; }
-  S.done = true; const used = S.min - S.started - S.paused, ratio = used / S.par;
+  S.done = true; P.path = null; P.onArrive = null; const used = S.min - S.started - S.paused, ratio = used / S.par;
   let stars = ratio <= 1.2 ? 3 : ratio <= 1.7 ? 2 : 1; if (S.hintUsed) stars = Math.min(stars, 2);
   const prev = save.stars[m.id] || 0; if (stars > prev) { save.stars[m.id] = stars; persist(); }
   const start = m.start.place ? PL[m.start.place].node : stIndex[m.start.station] ;
@@ -538,7 +571,7 @@ function checkMission() {
     <p>We took <b>${Math.round(used)} min</b>. The quickest way takes about <b>${Math.round(S.par)} min</b>.${S.hintUsed ? ' (We used the hint, so 2 stars at most.)' : ''}</p>
     <div class="eyebrow">The quickest way</div><ol style="margin:6px 0 12px;padding-left:20px;line-height:1.5">${steps.map(stepHtml).join('')}</ol>
     <div class="row"><button class="btn primary" id="nextM">Next mission</button><button class="btn ghost" id="again">Play again</button><button class="btn ghost" id="toMenu">Menu</button></div>`);
-    const idx = MISSIONS.indexOf(m); document.getElementById('nextM').onclick = () => startMission(MISSIONS[(idx + 1) % MISSIONS.length]);
+    learn('Ja / Nein'); const idx = MISSIONS.indexOf(m); document.getElementById('nextM').onclick = () => startMission(MISSIONS[(idx + 1) % MISSIONS.length]);
     document.getElementById('again').onclick = () => startMission(m); document.getElementById('toMenu').onclick = () => openMenu('missions');
   }, 700);
 }
@@ -551,7 +584,7 @@ function hintBtn() { return S.mission && !S.done ? '<button class="btn ghost" id
 function wireHint() { const b = document.getElementById('hintBtn'); if (!b) return; b.onclick = () => {
   const left = S.mission.goal.filter(g => !S.visited.has(g)); if (!left.length) return;
   const src = P.at.kind === 'station' || P.at.kind === 'offmap' ? stIndex[P.at.st] : (P.path ? P.path[Math.min(P.pathI + 1, P.path.length - 1)] : P.at.node);
-  const plan = bestPlan(src, left); S.hintUsed = true; const ds = plan.legs.map(describeLeg); S.hint = ds.map(d => d.poly.map(([x, y]) => [x, y]));
+  const plan = bestPlan(src, left); S.hintUsed = true; learn('Wo ist …?'); learn('Entschuldigung'); learn('Sprechen Sie Englisch?'); const ds = plan.legs.map(describeLeg); S.hint = ds.map(d => d.poly.map(([x, y]) => [x, y]));
   const steps = plan.legs.flatMap((lg, k) => ds[k].steps.concat([{ kind: 'arrive', p: lg.p }]));
   sheet(`<div class="eyebrow">Quickest way from here · about ${Math.round(plan.mins)} min</div><ol style="margin:6px 0 12px;padding-left:20px;line-height:1.5">${steps.map(stepHtml).join('')}</ol>
     <p class="muted">The dotted yellow line shows it on the map.</p><div class="row"><button class="btn primary" id="hintOk">Got it</button></div>`);
@@ -570,7 +603,9 @@ function showMissionSheet() {
   let comp = '';
   if (g) { const d = DIST(P.x, P.y, g.x, g.y), ang = Math.atan2(g.x - P.x, -(g.y - P.y)) * 180 / Math.PI;
     const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'], dn = dirs[Math.round(((ang + 360) % 360) / 45) % 8];
-    comp = `<div class="compass"><svg viewBox="0 0 24 24" style="transform:rotate(${ang}deg)"><path d="M12 2l6 18-6-4-6 4z" fill="#f3c22f"/></svg>${d > 950 ? (d / 1000).toFixed(1) + ' km' : Math.round(d / 10) * 10 + ' m'} ${dn} to ${esc(g.name)}</div>`; }
+    const DE = { N: 'Norden', NE: 'Nordosten', E: 'Osten', SE: 'Südosten', S: 'Süden', SW: 'Südwesten', W: 'Westen', NW: 'Nordwesten' };
+    if (dn.includes('N')) learn('Norden'); if (dn.includes('S')) learn('Süden'); if (dn.includes('E')) learn('Osten'); if (dn.includes('W')) learn('Westen');
+    comp = `<div class="compass"><svg viewBox="0 0 24 24" style="transform:rotate(${ang}deg)"><path d="M12 2l6 18-6-4-6 4z" fill="#f3c22f"/></svg>${d > 950 ? (d / 1000).toFixed(1) + ' km' : Math.round(d / 10) * 10 + ' m'} ${dn} <span class="muted" style="font-weight:500">(${DE[dn]})</span> to ${esc(g.name)}</div>`; }
   sheet(`<div class="eyebrow">${esc(m.title)}</div>
     <div class="goals">${m.goal.map(id => `<div class="goal ${S.visited.has(id) ? 'done' : ''}"><div class="tick">${S.visited.has(id) ? '✓' : ''}</div><span>${esc(PL[id].name)}</span></div>`).join('')}</div>
     ${comp}<div class="row" style="margin-top:10px">${P.path ? '<span class="muted">Walking…</span>' : ''}${hintBtn()}<button class="btn ghost" id="toMenu">Menu</button></div>`);
@@ -579,7 +614,7 @@ function showMissionSheet() {
 
 // ------------------------------------------------------------------ sheet + overlay
 const sheetEl = document.getElementById('sheet'), ov = document.getElementById('overlay');
-function sheet(html) { sheetEl.hidden = false; sheetEl.innerHTML = html; }
+function sheet(html) { sheetEl.hidden = false; sheetEl.innerHTML = html; const box = document.getElementById('toasts'); if (box) box.style.bottom = (sheetEl.offsetHeight + 12) + 'px'; }
 function hideSheet() { sheetEl.hidden = true; }
 function hideOverlay() { ov.hidden = true; }
 const fmt = m => { m = ((Math.round(m) % 1440) + 1440) % 1440; return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
@@ -625,8 +660,11 @@ function placesList() {
 }
 function wordsList() {
   ov.hidden = false;
-  ov.innerHTML = `<div class="wrap">${ovHead('German words')}<p class="muted">Words unlock as they come up in the game.</p><div class="list">${Object.entries(WORDS).map(([w, [en, tip]]) => save.words[w]
-    ? `<div class="word"><b>${esc(w)}</b><span class="en">${esc(en)}</span><p>${esc(tip)}</p></div>` : `<div class="word locked"><b>• • •</b><p>Not found yet</p></div>`).join('')}</div></div>`;
+  const all = Object.entries(WORDS), got = all.filter(([w]) => save.words[w]).length;
+  ov.innerHTML = `<div class="wrap">${ovHead('German words')}<p class="muted">${got} of ${all.length} found. Words unlock as they come up: on street signs, on the train, at places and markets, and in the weather.</p>
+    ${WORD_TOPICS.map((t, ti) => { const ws = all.filter(([, v]) => v[2] === ti), n = ws.filter(([w]) => save.words[w]).length;
+      return `<div class="sec">${t} · ${n}/${ws.length}</div><div class="list">${ws.map(([w, [en, tip]]) => save.words[w]
+        ? `<div class="word"><b>${esc(w)}</b><span class="en">${esc(en)}</span><p>${esc(tip)}</p></div>` : `<div class="word locked"><b>• • •</b><p>Not found yet</p></div>`).join('')}</div>`; }).join('')}</div>`;
   document.getElementById('back').onclick = () => openMenu();
 }
 

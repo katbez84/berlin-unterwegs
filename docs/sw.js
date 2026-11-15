@@ -1,6 +1,6 @@
 // Keeps Berlin Unterwegs working with no internet.
 // The game file is served from the phone's cache first, then refreshed in the background when online.
-const CACHE = 'berlin-unterwegs-20261115144046';
+const CACHE = 'berlin-unterwegs-20261115145106';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icon-180.png', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

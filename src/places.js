@@ -70,30 +70,6 @@ const PLACES = [
     scene: { station: 'Sophie-Charlotte-Platz', walk: 15, text: 'Come up from the U-Bahn onto Schloßstraße and walk north along the wide tree-lined middle path. The palace dome appears at the end of the street.' } },
 ];
 
-// German words the game teaches. Unlocked by things that happen in play.
-const WORDS = {
-  Straße: ['street', 'Written “Str.” on signs. Neue Roßstraße is our street.'],
-  Platz: ['square', 'Alexanderplatz, Moritzplatz, Gendarmenmarkt is a Platz too.'],
-  Brücke: ['bridge', 'Jannowitzbrücke is a station named after a bridge over the Spree.'],
-  Bahnhof: ['station', 'Bf. on signs. Hauptbahnhof means main station.'],
-  Richtung: ['direction', 'Trains are signed by the end station they go toward: “U8 Richtung Hermannstraße”.'],
-  'Nächster Halt': ['next stop', 'The announcement you hear before every station.'],
-  Umsteigen: ['change trains', 'Signs say “Umsteigen zu U1, U3” at stations where lines meet.'],
-  'Zurückbleiben, bitte!': ['stand back, please', 'Said just before the U-Bahn doors close. Don’t run for it.'],
-  Ausgang: ['exit', 'Look for yellow or white “Ausgang” signs to leave the station.'],
-  Gleis: ['platform / track', 'S-Bahn stations show “Gleis 1”, “Gleis 2”. Check the Richtung on the screen above it.'],
-  Weihnachtsmarkt: ['Christmas market', 'Most open around noon and close at 10 pm.'],
-  Glühwein: ['hot spiced wine', 'Sold at every market, for grown-ups. You pay a deposit (Pfand) on the mug.'],
-  Kinderpunsch: ['kids’ hot punch', 'The no-alcohol version of Glühwein, for everyone.'],
-  Pfand: ['deposit', 'You get money back when you return the mug or bottle.'],
-  Eingang: ['entrance', 'Opposite of Ausgang.'],
-  Entschuldigung: ['excuse me / sorry', 'Use it to ask for help or squeeze past.'],
-  Danke: ['thank you', '“Danke schön” is extra polite.'],
-  'Eine heiße Schokolade, bitte': ['a hot chocolate, please', 'Useful when you are cold.'],
-  Tor: ['gate', 'Brandenburger Tor, Schlesisches Tor, Kottbusser Tor.'],
-  Ufer: ['riverbank', 'Streets along water are often called Ufer.'],
-};
-
 // Missions. goal: list of place ids (all must be visited). start: place id or station name.
 // day: index into DAYS. time: start minute of day. rain: drizzle on/off.
 const MISSIONS = [
