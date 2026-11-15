@@ -152,10 +152,22 @@ const S = { mode: 'title', day: 1, min: 600, temp: 4, rain: false, warmth: 100, 
 // ------------------------------------------------------------------ canvas + view
 const cv = document.getElementById('map'), ctx = cv.getContext('2d');
 let DPR = Math.min(window.devicePixelRatio || 1, 2), W = 0, H = 0;
-const V = { x: 0, y: 0, s: 0.35, follow: true };
-function resize() { W = cv.clientWidth; H = cv.clientHeight; cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR); labelsDirty = true; draw(); }
-const toScreen = (x, y) => [(x - V.x) * V.s + W / 2, (y - V.y) * V.s + H / 2];
-const toWorld = (sx, sy) => [(sx - W / 2) / V.s + V.x, (sy - H / 2) / V.s + V.y];
+const V = { x: 0, y: 0, s: 0.35, follow: true, rot: 0, walk: false, look: 0 };
+function resize() { DPR = Math.min(window.devicePixelRatio || 1, V.walk ? 1.5 : 2); W = cv.clientWidth; H = cv.clientHeight; cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR); labelsDirty = true; draw(); }
+const anchor = () => [W / 2, V.walk ? H * 0.5 : H / 2];
+function toScreen(x, y) { const [ax, ay] = anchor(), c = Math.cos(V.rot), sn = Math.sin(V.rot), dx = (x - V.x) * V.s, dy = (y - V.y) * V.s; return [dx * c - dy * sn + ax, dx * sn + dy * c + ay]; }
+function toWorld(sx, sy) { const [ax, ay] = anchor(), c = Math.cos(V.rot), sn = Math.sin(V.rot), dx = sx - ax, dy = sy - ay; return [(dx * c + dy * sn) / V.s + V.x, (-dx * sn + dy * c) / V.s + V.y]; }
+function keepPoint(wx, wy, sx, sy) { const [nx, ny] = toWorld(sx, sy); V.x += wx - nx; V.y += wy - ny; }
+// pointer position in the canvas's own pixels, undoing the walking-view tilt
+function localXY(e) {
+  if (!V.walk) { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+  const m = new DOMMatrix(getComputedStyle(cv).transform), ox = W / 2, oy = H;
+  const qx = e.clientX - cv.offsetLeft - ox, qy = e.clientY - cv.offsetTop - oy;
+  const a = m.m11, b = m.m21, c = m.m41, d = m.m12, e2 = m.m22, f = m.m42, g = m.m14, h = m.m24, i = m.m44;
+  const A = e2 * i - f * h, B = -(d * i - f * g), C = d * h - e2 * g, D = -(b * i - c * h), E = a * i - c * g, F = -(a * h - b * g), G = b * f - c * e2, Hh = -(a * f - c * d), I = a * e2 - b * d;
+  const u = A * qx + D * qy + G, v = B * qx + E * qy + Hh, w = C * qx + F * qy + I;
+  return [u / w + ox, v / w + oy];
+}
 const clampScale = s => Math.max(0.025, Math.min(4, s));
 
 // cached world-space paths
@@ -212,7 +224,8 @@ function draw() {
   const dk = darkness(), C = k => mix(DAYC[k], NIGHTC[k], dk);
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.fillStyle = mix([200, 206, 212], [18, 23, 34], dk); ctx.fillRect(0, 0, W, H);
-  ctx.setTransform(V.s * DPR, 0, 0, V.s * DPR, (W / 2 - V.x * V.s) * DPR, (H / 2 - V.y * V.s) * DPR);
+  { const [ax, ay] = anchor(), c = Math.cos(V.rot) * V.s, sn = Math.sin(V.rot) * V.s;
+    ctx.setTransform(c * DPR, sn * DPR, -sn * DPR, c * DPR, (ax - (c * V.x - sn * V.y)) * DPR, (ay - (sn * V.x + c * V.y)) * DPR); }
   ctx.fillStyle = C('ground'); ctx.fillRect(BX0, BY0, BX1 - BX0, BY1 - BY0);
   ctx.fillStyle = C('park'); ctx.fill(paths.park, 'evenodd');
   ctx.fillStyle = C('water'); ctx.fill(paths.water, 'evenodd');
@@ -247,9 +260,13 @@ function draw() {
   if (labelsDirty) layoutLabels();
   if (labels.length) { const font = getComputedStyle(document.body).getPropertyValue('--display');
     ctx.font = `600 12px ${font}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
-    for (const L of labels) { const [sx, sy] = toScreen(L.x, L.y); ctx.save(); ctx.translate(sx, sy); ctx.rotate(L.ang);
+    for (const L of labels) { const [sx, sy] = toScreen(L.x, L.y); ctx.save(); ctx.translate(sx, sy); let la = L.ang + V.rot; while (la > Math.PI / 2) la -= Math.PI; while (la < -Math.PI / 2) la += Math.PI; ctx.rotate(la);
       ctx.lineWidth = 3; ctx.strokeStyle = C('halo'); ctx.strokeText(L.name, 0, 0); ctx.fillStyle = C('label'); ctx.fillText(L.name, 0, 0); ctx.restore(); } }
-  drawStations(dk); drawPlaces(); drawPlayer(); drawReal();
+  drawStations(dk); drawPlaces(); drawCornerPlate(); drawPlayer(); drawReal();
+  if (V.walk) { // fog toward the horizon
+    const fog = ctx.createLinearGradient(0, 0, 0, H * 0.42), fc = mix([205, 211, 218], [40, 46, 66], dk);
+    fog.addColorStop(0, fc); fog.addColorStop(0.35, fc.replace('rgb', 'rgba').replace(')', ',0.85)')); fog.addColorStop(1, fc.replace('rgb', 'rgba').replace(')', ',0)'));
+    ctx.fillStyle = fog; ctx.fillRect(0, 0, W, H * 0.42); }
   if (S.rain && S.mode === 'play') drawRain(dk);
 }
 function drawStations(dk) {
@@ -283,12 +300,22 @@ function drawPlaces() {
     if (V.s > 0.7 || (isGoal && V.s > 0.25)) { ctx.font = `600 13px ${font}`; ctx.textAlign = 'center'; ctx.lineWidth = 3.2; ctx.strokeStyle = 'rgba(20,26,40,.85)'; ctx.strokeText(p.name, sx, sy + r + 11); ctx.fillStyle = '#fff'; ctx.fillText(p.name, sx, sy + r + 11); }
   }
 }
+function drawCornerPlate() {
+  const t = S.turn; if (!t || t.node < 0 || !t.name || !P.path) return;
+  const [sx, sy] = toScreen(NX[t.node], NY[t.node]); const font = getComputedStyle(document.body).getPropertyValue('--display');
+  ctx.font = `600 ${V.walk ? 17 : 14}px ${font}`; const tw = ctx.measureText(t.name).width, w = tw + 18, h = V.walk ? 26 : 22, x = sx - w / 2, y = sy - h - 14;
+  ctx.fillStyle = '#fbfbf7'; ctx.beginPath(); ctx.roundRect(x, y, w, h, 3); ctx.fill(); ctx.strokeStyle = '#111'; ctx.lineWidth = 2; ctx.beginPath(); ctx.roundRect(x + 2.5, y + 2.5, w - 5, h - 5, 2); ctx.stroke();
+  ctx.fillStyle = '#111'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(t.name, sx, y + h / 2 + 1);
+  ctx.strokeStyle = '#111'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(sx, y + h); ctx.lineTo(sx, sy - 4); ctx.stroke();
+  ctx.fillStyle = '#f3c22f'; ctx.beginPath(); ctx.arc(sx, sy, 5, 0, 7); ctx.fill(); ctx.stroke();
+}
 function drawPlayer() {
   if (S.mode !== 'play') return;
   const [sx, sy] = toScreen(P.x, P.y);
   if (P.train) { const l = P.train.line; ctx.fillStyle = l.kind === 'U' ? '#f3c22f' : '#c23a2b'; ctx.strokeStyle = '#111'; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.roundRect(sx - 15, sy - 8, 30, 16, 5); ctx.fill(); ctx.stroke(); ctx.fillStyle = l.color; ctx.fillRect(sx - 11, sy - 2, 22, 4); return; }
   ctx.fillStyle = 'rgba(243,194,47,.25)'; ctx.beginPath(); ctx.arc(sx, sy, 20, 0, 7); ctx.fill();
+  if (V.walk) { ctx.save(); ctx.translate(sx, sy); ctx.rotate(-V.look); ctx.fillStyle = '#f3c22f'; ctx.strokeStyle = '#151c2a'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(0, -16); ctx.lineTo(11, 10); ctx.lineTo(0, 4); ctx.lineTo(-11, 10); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore(); return; }
   ctx.fillStyle = '#f3c22f'; ctx.strokeStyle = '#151c2a'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(sx, sy, 9, 0, 7); ctx.fill(); ctx.stroke();
   ctx.fillStyle = '#c0392b'; ctx.fillRect(sx - 6, sy + 1, 12, 3); // scarf
 }
@@ -305,26 +332,37 @@ function drawRain(dk) {
 
 // ------------------------------------------------------------------ input: pan, pinch, tap
 const ptrs = new Map(); let gesture = null;
-cv.addEventListener('pointerdown', e => { cv.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, [e.offsetX, e.offsetY]);
-  if (ptrs.size === 1) gesture = { kind: 'maybe', sx: e.offsetX, sy: e.offsetY, t: performance.now(), vx: V.x, vy: V.y };
+cv.addEventListener('pointerdown', e => { cv.setPointerCapture(e.pointerId); const [ex, ey] = localXY(e); ptrs.set(e.pointerId, [ex, ey]);
+  if (ptrs.size === 1) gesture = { kind: 'maybe', sx: ex, sy: ey, t: performance.now(), vx: V.x, vy: V.y, look: V.look };
   else if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; gesture = { kind: 'pinch', d: Math.hypot(a[0] - b[0], a[1] - b[1]), s: V.s, mid: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], vx: V.x, vy: V.y }; } });
-cv.addEventListener('pointermove', e => { if (!ptrs.has(e.pointerId)) return; ptrs.set(e.pointerId, [e.offsetX, e.offsetY]);
+cv.addEventListener('pointermove', e => { if (!ptrs.has(e.pointerId)) return; const [ex, ey] = localXY(e); ptrs.set(e.pointerId, [ex, ey]);
   if (!gesture) return;
   if (gesture.kind === 'pinch' && ptrs.size === 2) { const [a, b] = [...ptrs.values()]; const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
-    const ns = clampScale(gesture.s * d / gesture.d); const [wx, wy] = [(gesture.mid[0] - W / 2) / gesture.s + gesture.vx, (gesture.mid[1] - H / 2) / gesture.s + gesture.vy];
-    const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; V.s = ns; V.x = wx - (mid[0] - W / 2) / ns; V.y = wy - (mid[1] - H / 2) / ns; V.follow = false; labelsDirty = true; draw(); return; }
-  const dx = e.offsetX - gesture.sx, dy = e.offsetY - gesture.sy;
+    const ns = clampScale(gesture.s * d / gesture.d);
+    if (V.walk) { V.s = Math.max(0.4, ns); labelsDirty = true; return; }
+    V.x = gesture.vx; V.y = gesture.vy; V.s = gesture.s; const [wx, wy] = toWorld(gesture.mid[0], gesture.mid[1]);
+    const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; V.s = ns; keepPoint(wx, wy, mid[0], mid[1]); V.follow = false; labelsDirty = true; draw(); return; }
+  const dx = ex - gesture.sx, dy = ey - gesture.sy;
   if (gesture.kind === 'maybe' && Math.hypot(dx, dy) > 8) gesture.kind = 'pan';
+  if (gesture.kind === 'pan' && V.walk) { V.look = gesture.look + dx * 0.006; labelsDirty = true; return; } // drag sideways to look around
   if (gesture.kind === 'pan') { V.x = gesture.vx - dx / V.s; V.y = gesture.vy - dy / V.s; V.follow = false; labelsDirty = true; draw(); } });
 const endPtr = e => { const g = gesture; ptrs.delete(e.pointerId);
-  if (g && g.kind === 'maybe' && ptrs.size === 0 && performance.now() - g.t < 500) onTap(e.offsetX, e.offsetY);
+  if (g && g.kind === 'maybe' && ptrs.size === 0 && performance.now() - g.t < 500) { const [ex, ey] = localXY(e); onTap(ex, ey); }
   if (ptrs.size === 0) gesture = null; else if (g && g.kind === 'pinch') { const [p] = [...ptrs.values()]; gesture = { kind: 'pan', sx: p[0], sy: p[1], vx: V.x, vy: V.y }; } };
 cv.addEventListener('pointerup', endPtr); cv.addEventListener('pointercancel', e => { ptrs.delete(e.pointerId); gesture = null; });
-cv.addEventListener('wheel', e => { e.preventDefault(); zoomAt(e.offsetX, e.offsetY, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
-function zoomAt(sx, sy, f) { const [wx, wy] = toWorld(sx, sy); V.s = clampScale(V.s * f); V.x = wx - (sx - W / 2) / V.s; V.y = wy - (sy - H / 2) / V.s; labelsDirty = true; draw(); }
-document.getElementById('zin').onclick = () => zoomAt(W / 2, H / 2, 1.6);
-document.getElementById('zout').onclick = () => zoomAt(W / 2, H / 2, 1 / 1.6);
-document.getElementById('recenter').onclick = () => { if (S.real && S.real.pos) { V.x = S.real.pos[0]; V.y = S.real.pos[1]; } else { V.x = P.x; V.y = P.y; } V.follow = true; if (V.s < 0.5) V.s = 0.9; labelsDirty = true; draw(); };
+cv.addEventListener('wheel', e => { e.preventDefault(); const [ex, ey] = localXY(e); zoomAt(ex, ey, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
+function zoomAt(sx, sy, f) { const [wx, wy] = toWorld(sx, sy); V.s = clampScale(V.s * f); if (V.walk) V.s = Math.max(0.4, V.s); else keepPoint(wx, wy, sx, sy); labelsDirty = true; draw(); }
+document.getElementById('zin').onclick = () => { const [ax, ay] = anchor(); zoomAt(ax, ay, 1.6); };
+document.getElementById('zout').onclick = () => { const [ax, ay] = anchor(); zoomAt(ax, ay, 1 / 1.6); };
+const walkBtn = document.getElementById('walkview');
+function setWalkView(on) {
+  V.walk = on; V.look = 0; document.getElementById('app').classList.toggle('walk', on); walkBtn.classList.toggle('on', on); walkBtn.setAttribute('aria-pressed', on);
+  if (on) { V.follow = true; if (V.s < 1.1) V.s = 1.6; const fx = S.real && S.real.pos ? S.real.pos : [P.x, P.y]; V.x = fx[0]; V.y = fx[1]; }
+  else { V.rot = 0; }
+  resize(); try { localStorage.setItem('berlin-walkview', on ? '1' : '0'); } catch (e) {}
+}
+walkBtn.onclick = () => { setWalkView(!V.walk); toast(V.walk ? 'Walking view: the way we face is up' : 'Map view: north is up'); };
+document.getElementById('recenter').onclick = () => { V.look = 0; if (S.real && S.real.pos) { V.x = S.real.pos[0]; V.y = S.real.pos[1]; } else { V.x = P.x; V.y = P.y; } V.follow = true; if (V.s < 0.5) V.s = 0.9; labelsDirty = true; draw(); };
 document.getElementById('menuBtn').onclick = () => openMenu();
 
 function hitTest(sx, sy) {
@@ -387,6 +425,33 @@ function atNode(i) {
 const signEl = document.getElementById('streetsign');
 function showStreetSign(nm) { if (!signEl) return; signEl.textContent = nm; signEl.hidden = false; }
 function hideStreetSign() { if (signEl) signEl.hidden = true; }
+function nextTurn() {
+  const path = P.path; if (!path || P.pathI + 1 >= path.length) return null;
+  let dist = DIST(P.x, P.y, NX[path[P.pathI + 1]], NY[path[P.pathI + 1]]);
+  let cur = edgeName.get(ekey(path[P.pathI], path[P.pathI + 1])) || '';
+  for (let j = P.pathI + 1; j < path.length - 1; j++) {
+    const n = path[j], pv = path[j - 1], nx = path[j + 1], nm = edgeName.get(ekey(n, nx)) || '';
+    const a1 = Math.atan2(NY[n] - NY[pv], NX[n] - NX[pv]), a2 = Math.atan2(NY[nx] - NY[n], NX[nx] - NX[n]);
+    let t = a2 - a1; while (t > Math.PI) t -= 2 * Math.PI; while (t < -Math.PI) t += 2 * Math.PI;
+    const junction = adj[n].length >= 6;
+    if (junction && (Math.abs(t) > 0.6 || (nm && cur && nm !== cur))) return { dist, node: n, name: nm, dir: Math.abs(t) <= 0.6 ? 'geradeaus' : t > 0 ? 'rechts' : 'links', t };
+    if (!cur && nm) cur = nm;
+    dist += DIST(NX[n], NY[n], NX[nx], NY[nx]);
+  }
+  return { dist, node: -1, arrive: true };
+}
+const turnEl = document.getElementById('turn');
+let turnKey = '';
+function updateTurn() {
+  const cel = document.getElementById('compass'), g = cel && nextGoal(); if (g) cel.innerHTML = compassInner(g);
+  const t = P.path && S.mode === 'play' ? nextTurn() : null; S.turn = t;
+  if (!t || !turnEl) { if (turnEl && !turnEl.hidden) { turnEl.hidden = true; turnKey = ''; } return; }
+  const dm = t.dist < 50 ? 'Now' : 'In ' + (t.dist > 950 ? (t.dist / 1000).toFixed(1) + ' km' : Math.round(t.dist / 10) * 10 + ' m');
+  const EN = { links: 'left', rechts: 'right', geradeaus: 'straight on' }, ROT = { links: -90, rechts: 90, geradeaus: 0 };
+  const html = t.arrive ? `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6" fill="#f3c22f"/></svg><div><b>${dm}</b><span>we’re there</span></div>`
+    : `<svg viewBox="0 0 24 24" style="transform:rotate(${ROT[t.dir]}deg)"><path d="M12 3l7 9h-4v9H9v-9H5z" fill="#f3c22f"/></svg><div><b>${dm}: ${t.dir}</b><span>${EN[t.dir]}${t.name ? ' onto ' + esc(t.name) : ''}</span></div>`;
+  if (html !== turnKey) { turnKey = html; turnEl.innerHTML = html; turnEl.hidden = false; }
+}
 function walkedMeters(m) {
   const mins = m / WALK; addMinutes(mins);
   const drain = (S.rain ? 1.15 : 0.7) + (isDark() ? 0.3 : 0) + (S.temp <= 2 ? 0.2 : 0);
@@ -589,6 +654,14 @@ function wireHint() { const b = document.getElementById('hintBtn'); if (!b) retu
   sheet(`<div class="eyebrow">Quickest way from here · about ${Math.round(plan.mins)} min</div><ol style="margin:6px 0 12px;padding-left:20px;line-height:1.5">${steps.map(stepHtml).join('')}</ol>
     <p class="muted">The dotted yellow line shows it on the map.</p><div class="row"><button class="btn primary" id="hintOk">Got it</button></div>`);
   document.getElementById('hintOk').onclick = () => (P.at.kind === 'station' || P.at.kind === 'offmap') ? stationSheet() : showMissionSheet(); }; }
+function compassInner(g) {
+  const d = DIST(P.x, P.y, g.x, g.y), ang = Math.atan2(g.x - P.x, -(g.y - P.y)) * 180 / Math.PI;
+  const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'], dn = dirs[Math.round(((ang + 360) % 360) / 45) % 8];
+  const DE = { N: 'Norden', NE: 'Nordosten', E: 'Osten', SE: 'Südosten', S: 'Süden', SW: 'Südwesten', W: 'Westen', NW: 'Nordwesten' };
+  if (dn.includes('N')) learn('Norden'); if (dn.includes('S')) learn('Süden'); if (dn.includes('E')) learn('Osten'); if (dn.includes('W')) learn('Westen');
+  const shown = ang + V.rot * 180 / Math.PI; // in walking view the arrow points the way to go on screen
+  return `<svg viewBox="0 0 24 24" style="transform:rotate(${shown}deg)"><path d="M12 2l6 18-6-4-6 4z" fill="#f3c22f"/></svg><span>${d > 950 ? (d / 1000).toFixed(1) + ' km' : Math.round(d / 10) * 10 + ' m'} ${dn} <span class="muted" style="font-weight:500">(${DE[dn]})</span> to ${esc(g.name)}</span>`;
+}
 function showMissionSheet() {
   if (S.mode !== 'play' || P.train) return;
   if (P.at.kind === 'offmap') return stationSheet();
@@ -600,12 +673,7 @@ function showMissionSheet() {
     document.getElementById('toMenu').onclick = () => openMenu(); return; }
   if (S.done) return;
   const g = nextGoal();
-  let comp = '';
-  if (g) { const d = DIST(P.x, P.y, g.x, g.y), ang = Math.atan2(g.x - P.x, -(g.y - P.y)) * 180 / Math.PI;
-    const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'], dn = dirs[Math.round(((ang + 360) % 360) / 45) % 8];
-    const DE = { N: 'Norden', NE: 'Nordosten', E: 'Osten', SE: 'Südosten', S: 'Süden', SW: 'Südwesten', W: 'Westen', NW: 'Nordwesten' };
-    if (dn.includes('N')) learn('Norden'); if (dn.includes('S')) learn('Süden'); if (dn.includes('E')) learn('Osten'); if (dn.includes('W')) learn('Westen');
-    comp = `<div class="compass"><svg viewBox="0 0 24 24" style="transform:rotate(${ang}deg)"><path d="M12 2l6 18-6-4-6 4z" fill="#f3c22f"/></svg>${d > 950 ? (d / 1000).toFixed(1) + ' km' : Math.round(d / 10) * 10 + ' m'} ${dn} <span class="muted" style="font-weight:500">(${DE[dn]})</span> to ${esc(g.name)}</div>`; }
+  const comp = g ? `<div class="compass" id="compass">${compassInner(g)}</div>` : '';
   sheet(`<div class="eyebrow">${esc(m.title)}</div>
     <div class="goals">${m.goal.map(id => `<div class="goal ${S.visited.has(id) ? 'done' : ''}"><div class="tick">${S.visited.has(id) ? '✓' : ''}</div><span>${esc(PL[id].name)}</span></div>`).join('')}</div>
     ${comp}<div class="row" style="margin-top:10px">${P.path ? '<span class="muted">Walking…</span>' : ''}${hintBtn()}<button class="btn ghost" id="toMenu">Menu</button></div>`);
@@ -674,7 +742,8 @@ function startReal() {
   V.x = PL.H.x; V.y = PL.H.y; V.s = 0.6; labelsDirty = true;
   if (!('geolocation' in navigator)) { S.real.err = 'This phone or browser can’t share its location.'; realSheet(); return; }
   try {
-    S.real.watch = navigator.geolocation.watchPosition(p => { const [x, y] = proj(p.coords.latitude, p.coords.longitude); const first = !S.real.pos; S.real.pos = [x, y]; S.real.acc = p.coords.accuracy || 30; S.real.err = null;
+    S.real.watch = navigator.geolocation.watchPosition(p => { const [x, y] = proj(p.coords.latitude, p.coords.longitude); const first = !S.real.pos;
+      if (S.real.pos && DIST(x, y, S.real.pos[0], S.real.pos[1]) > 6) S.real.heading = Math.atan2(y - S.real.pos[1], x - S.real.pos[0]); S.real.pos = [x, y]; S.real.acc = p.coords.accuracy || 30; S.real.err = null;
       if (first || V.follow) { V.x = x; V.y = y; if (first) { V.s = 1; V.follow = true; } labelsDirty = true; } realSheet(); },
       e => { S.real.err = e.code === 1 ? 'Location is turned off for this game. Allow location for it in your phone’s settings, then try again.' : 'We can’t find our location right now. Try outside, away from tall buildings.'; realSheet(); },
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
@@ -697,7 +766,9 @@ function realSheet() {
 // ------------------------------------------------------------------ HUD + loop
 const $ = id => document.getElementById(id);
 const wxc = $('wxicon').getContext('2d');
-let hudKey = '';
+let hudKey = '', skyKey = '';
+function updateSky() { if (!V.walk) return; const dk = Math.round(darkness() * 20) / 20, k = dk + '' + S.rain; if (k === skyKey) return; skyKey = k;
+  document.getElementById('sky').style.background = `linear-gradient(${mix([150, 165, 182], [8, 12, 24], dk)}, ${mix([205, 211, 218], [40, 46, 66], dk)})`; }
 function updateHud() {
   const temp = Math.round(S.temp - (isDark() ? 1 : 0));
   const key = [fmt(S.min), S.day, temp, S.rain, Math.round(S.warmth), isDark()].join();
@@ -710,7 +781,7 @@ function updateHud() {
   wxc.fillStyle = '#c9d2e0'; wxc.beginPath(); wxc.arc(14, 22, 8, 0, 7); wxc.arc(23, 19, 9, 0, 7); wxc.arc(30, 24, 6, 0, 7); wxc.rect(8, 22, 26, 8); wxc.fill();
   if (S.rain) { wxc.strokeStyle = '#7fb1e6'; wxc.lineWidth = 2.5; wxc.beginPath(); [12, 20, 28].forEach(x => { wxc.moveTo(x, 33); wxc.lineTo(x - 2, 38); }); wxc.stroke(); }
 }
-let last = performance.now(), settleT = 0;
+let last = performance.now(), settleT = 0, walkLayoutT = 0, turnT = 0;
 function loop(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   let moving = false;
@@ -718,11 +789,22 @@ function loop(now) {
     if (P.path) { stepWalk(dt); moving = true; }
     if (P.train) { stepTrain(dt); moving = true; }
   }
-  if (moving && V.follow) { const [sx, sy] = toScreen(P.x, P.y); const mx = W * 0.25, my = H * 0.22;
+  if (V.walk) {
+    let tx = P.x, ty = P.y, head = null;
+    if (S.mode === 'real' && S.real && S.real.pos) { [tx, ty] = S.real.pos; head = S.real.heading ?? null; }
+    else if (P.train) { const l = P.train.line, a = ST[l.stops[P.train.i]], b = ST[l.stops[P.train.i + P.train.dir]] || a; if (b !== a) head = Math.atan2(b.y - a.y, b.x - a.x); }
+    else if (P.path && P.path[P.pathI + 1] !== undefined) { const n = P.path[P.pathI + 1]; if (DIST(P.x, P.y, NX[n], NY[n]) > 0.5) head = Math.atan2(NY[n] - P.y, NX[n] - P.x); }
+    if (head !== null) V.head = head;
+    if (V.follow) { V.x += (tx - V.x) * 0.25; V.y += (ty - V.y) * 0.25; }
+    const want = -Math.PI / 2 - (V.head ?? -Math.PI / 2) + V.look; let dr = want - V.rot; while (dr > Math.PI) dr -= 2 * Math.PI; while (dr < -Math.PI) dr += 2 * Math.PI;
+    V.rot += dr * Math.min(1, dt * 4); if (Math.abs(dr) > 0.002 || moving) { walkLayoutT -= dt; if (walkLayoutT <= 0) { labelsDirty = true; walkLayoutT = 0.3; } }
+  }
+  turnT -= dt; if (turnT <= 0) { turnT = 0.25; updateTurn(); }
+  if (moving && V.follow && !V.walk) { const [sx, sy] = toScreen(P.x, P.y); const mx = W * 0.25, my = H * 0.22;
     if (sx < mx || sx > W - mx || sy < my + 60 || sy > H - my - sheetEl.offsetHeight * 0.6) { V.x += (P.x - V.x) * 0.08; V.y += (P.y - V.y) * 0.08; settleT = 0.15; } }
   if (settleT > 0) { settleT -= dt; if (settleT <= 0) labelsDirty = true; }
   if (S.rain && !reduceMotion) for (const d of drops) { d.y += d.v * dt * 1.3; d.x -= d.v * dt * 0.25; if (d.y > 1) { d.y = 0; d.x = Math.random() * 1.1; } }
-  updateHud();
+  updateHud(); updateSky();
   draw();
   requestAnimationFrame(loop);
 }
@@ -732,6 +814,7 @@ window.addEventListener('resize', resize);
 resize();
 V.x = PL.H.x; V.y = PL.H.y - 300; V.s = 0.16; S.day = 1; S.min = 16 * 60 + 40;
 openMenu(); hideSheet();
+try { if (localStorage.getItem('berlin-walkview') === '1') setWalkView(true); } catch (e) {}
 window.addEventListener('offline-ready', () => { if (!ov.hidden && ov.querySelector('.title-hero')) openMenu(); });
 requestAnimationFrame(loop);
 window.__game = { S, P, V, PL, ST, LINES, bestPlan, describeLeg, startMission, MISSIONS };

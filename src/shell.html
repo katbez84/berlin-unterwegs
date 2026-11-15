@@ -70,7 +70,8 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--sign);
 .goal.done .tick { background: var(--good); border-color: var(--good); color: #102010; }
 .goal.done span { color: var(--muted); text-decoration: line-through; }
 .compass { display: flex; align-items: center; gap: 8px; font-family: var(--display); font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.compass svg { width: 26px; height: 26px; transition: transform .2s; }
+.compass svg { width: 26px; height: 26px; transition: transform .2s; flex: none; }
+.compass > span { min-width: 0; line-height: 1.2; }
 
 /* line badges, station sign */
 .badge { display: inline-flex; align-items: center; justify-content: center; min-width: 36px; height: 24px; padding: 0 6px; border-radius: 4px; color: #fff; font-family: var(--display); font-weight: 700; font-size: 17px; letter-spacing: .02em; }
@@ -122,6 +123,18 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--sign);
 .word.locked { opacity: .45; }
 .small-print { font-size: 12px; color: var(--muted); line-height: 1.5; margin-top: 22px; }
 
+/* walking view: the map tilts back like a navigation app, sky above the horizon */
+#sky { position: absolute; inset: 0; background: var(--night); display: none; }
+#app.walk #sky { display: block; }
+#app.walk #map { left: -35%; width: 170%; top: -55%; height: 155%; transform-origin: 50% 100%; transform: perspective(1400px) rotateX(42deg); }
+.iconbtn.on { background: var(--sign) !important; }
+.iconbtn.on svg { stroke: var(--sign-ink); }
+#turn { position: absolute; z-index: 4; left: max(12px, env(safe-area-inset-left, 0px)); top: calc(env(safe-area-inset-top, 0px) + 108px); max-width: calc(100% - 90px);
+  display: flex; align-items: center; gap: 10px; background: color-mix(in srgb, var(--panel) 94%, transparent); border-radius: 10px; padding: 7px 12px 7px 8px; box-shadow: 0 2px 10px rgb(0 0 0 / .35); pointer-events: none; }
+#turn svg { width: 30px; height: 30px; flex: none; transition: transform .2s; }
+#turn b { display: block; font-family: var(--display); font-size: 20px; line-height: 1.05; }
+#turn span { display: block; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#turn div { min-width: 0; }
 /* Berlin-style street-name plate shown while walking */
 #streetsign { position: absolute; z-index: 4; left: max(12px, env(safe-area-inset-left, 0px)); top: calc(env(safe-area-inset-top, 0px) + 70px);
   max-width: calc(100% - 90px); background: #fbfbf7; color: #111; font-family: var(--display); font-weight: 600; font-size: 19px; letter-spacing: .01em;
@@ -137,6 +150,7 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--sign);
 </style>
 
 <div id="app">
+  <div id="sky"></div>
   <canvas id="map" aria-label="Map of central Berlin"></canvas>
   <header id="hud">
     <div><div class="clock" id="clock">15:10</div><div class="day" id="day">Sun 22 Nov</div></div>
@@ -147,9 +161,11 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--sign);
   <div id="ctrls">
     <button class="iconbtn" id="zin" aria-label="Zoom in"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
     <button class="iconbtn" id="zout" aria-label="Zoom out"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+    <button class="iconbtn" id="walkview" aria-label="Walking view" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M12 3l6 17-6-4-6 4z"/></svg></button>
     <button class="iconbtn" id="recenter" aria-label="Center on us"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
   </div>
   <div id="streetsign" hidden></div>
+  <div id="turn" hidden></div>
   <div id="toasts" aria-live="polite"></div>
   <section id="sheet" aria-live="polite"></section>
   <section id="overlay" hidden></section>
