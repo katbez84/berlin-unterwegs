@@ -155,12 +155,12 @@ let DPR = Math.min(window.devicePixelRatio || 1, 2), W = 0, H = 0;
 const V = { x: 0, y: 0, s: 0.35, follow: true, rot: 0, walk: false, look: 0 };
 function resize() { DPR = Math.min(window.devicePixelRatio || 1, V.walk ? 1.5 : 2); W = cv.clientWidth; H = cv.clientHeight; cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR); labelsDirty = true; draw(); }
 const anchor = () => [W / 2, V.walk ? H * 0.5 : H / 2];
-function toScreen(x, y) { const [ax, ay] = anchor(), c = Math.cos(V.rot), sn = Math.sin(V.rot), dx = (x - V.x) * V.s, dy = (y - V.y) * V.s; return [dx * c - dy * sn + ax, dx * sn + dy * c + ay]; }
-function toWorld(sx, sy) { const [ax, ay] = anchor(), c = Math.cos(V.rot), sn = Math.sin(V.rot), dx = sx - ax, dy = sy - ay; return [(dx * c + dy * sn) / V.s + V.x, (-dx * sn + dy * c) / V.s + V.y]; }
+function toScreen(x, y) { if (V3.on) return project3(x, y); const [ax, ay] = anchor(), c = Math.cos(V.rot), sn = Math.sin(V.rot), dx = (x - V.x) * V.s, dy = (y - V.y) * V.s; return [dx * c - dy * sn + ax, dx * sn + dy * c + ay]; }
+function toWorld(sx, sy) { if (V3.on) return unproject3(sx, sy); const [ax, ay] = anchor(), c = Math.cos(V.rot), sn = Math.sin(V.rot), dx = sx - ax, dy = sy - ay; return [(dx * c + dy * sn) / V.s + V.x, (-dx * sn + dy * c) / V.s + V.y]; }
 function keepPoint(wx, wy, sx, sy) { const [nx, ny] = toWorld(sx, sy); V.x += wx - nx; V.y += wy - ny; }
 // pointer position in the canvas's own pixels, undoing the walking-view tilt
 function localXY(e) {
-  if (!V.walk) { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+  if (!V.walk || V3.on) { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
   const m = new DOMMatrix(getComputedStyle(cv).transform), ox = W / 2, oy = H;
   const qx = e.clientX - cv.offsetLeft - ox, qy = e.clientY - cv.offsetTop - oy;
   const a = m.m11, b = m.m21, c = m.m41, d = m.m12, e2 = m.m22, f = m.m42, g = m.m14, h = m.m24, i = m.m44;
@@ -168,6 +168,7 @@ function localXY(e) {
   const u = A * qx + D * qy + G, v = B * qx + E * qy + Hh, w = C * qx + F * qy + I;
   return [u / w + ox, v / w + oy];
 }
+/*VIEW3D*/
 const clampScale = s => Math.max(0.025, Math.min(4, s));
 
 // cached world-space paths
@@ -195,7 +196,7 @@ function layoutLabels() {
   for (const L of labelCands) {
     if (L.c >= 4 && V.s < 0.9) continue;
     const [sx, sy] = toScreen(L.x, L.y); if (sx < -40 || sy < -40 || sx > W + 40 || sy > H + 40) continue;
-    const tw = ctx.measureText(L.name).width; if (L.len * V.s < tw + 12) continue;
+    const tw = ctx.measureText(L.name).width; if ((V3.on ? projLen(L).len : L.len * V.s) < tw + 12) continue;
     const prevs = byName.get(L.name) || []; if (prevs.some(([px, py]) => Math.hypot(px - sx, py - sy) < 260)) continue;
     const r = Math.max(tw, 14) / 2 + 4; if (boxes.some(([bx, by, br]) => Math.hypot(bx - sx, by - sy) < br + r)) continue;
     boxes.push([sx, sy, r]); prevs.push([sx, sy]); byName.set(L.name, prevs); labels.push({ ...L, tw });
@@ -222,6 +223,16 @@ const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 function draw() {
   if (!W) return;
   const dk = darkness(), C = k => mix(DAYC[k], NIGHTC[k], dk);
+  if (V3.on) {
+    render3D(); ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.clearRect(0, 0, W, H);
+    if (labelsDirty) layoutLabels();
+    ctx.font = `600 13px ${getComputedStyle(document.body).getPropertyValue('--display')}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+    for (const L of labels) { const pl = projLen(L); if (pl.len < L.tw + 8) continue; const [sx, sy] = project3(L.x, L.y);
+      ctx.save(); ctx.translate(sx, sy); ctx.rotate(pl.ang); ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(25,30,42,.85)'; ctx.strokeText(L.name, 0, 0); ctx.fillStyle = '#fff'; ctx.fillText(L.name, 0, 0); ctx.restore(); }
+    drawStations(dk); drawPlaces(); drawCornerPlate(); drawPlayer(); drawReal();
+    if (S.rain && S.mode === 'play') drawRain(dk);
+    return;
+  }
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.fillStyle = mix([200, 206, 212], [18, 23, 34], dk); ctx.fillRect(0, 0, W, H);
   { const [ax, ay] = anchor(), c = Math.cos(V.rot) * V.s, sn = Math.sin(V.rot) * V.s;
@@ -315,7 +326,7 @@ function drawPlayer() {
   if (P.train) { const l = P.train.line; ctx.fillStyle = l.kind === 'U' ? '#f3c22f' : '#c23a2b'; ctx.strokeStyle = '#111'; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.roundRect(sx - 15, sy - 8, 30, 16, 5); ctx.fill(); ctx.stroke(); ctx.fillStyle = l.color; ctx.fillRect(sx - 11, sy - 2, 22, 4); return; }
   ctx.fillStyle = 'rgba(243,194,47,.25)'; ctx.beginPath(); ctx.arc(sx, sy, 20, 0, 7); ctx.fill();
-  if (V.walk) { ctx.save(); ctx.translate(sx, sy); ctx.rotate(-V.look); ctx.fillStyle = '#f3c22f'; ctx.strokeStyle = '#151c2a'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(0, -16); ctx.lineTo(11, 10); ctx.lineTo(0, 4); ctx.lineTo(-11, 10); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore(); return; }
+  if (V.walk || FP.on) { ctx.save(); ctx.translate(sx, sy); ctx.rotate(-V.look); ctx.fillStyle = '#f3c22f'; ctx.strokeStyle = '#151c2a'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(0, -16); ctx.lineTo(11, 10); ctx.lineTo(0, 4); ctx.lineTo(-11, 10); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore(); return; }
   ctx.fillStyle = '#f3c22f'; ctx.strokeStyle = '#151c2a'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(sx, sy, 9, 0, 7); ctx.fill(); ctx.stroke();
   ctx.fillStyle = '#c0392b'; ctx.fillRect(sx - 6, sy + 1, 12, 3); // scarf
 }
@@ -339,7 +350,7 @@ cv.addEventListener('pointermove', e => { if (!ptrs.has(e.pointerId)) return; co
   if (!gesture) return;
   if (gesture.kind === 'pinch' && ptrs.size === 2) { const [a, b] = [...ptrs.values()]; const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
     const ns = clampScale(gesture.s * d / gesture.d);
-    if (V.walk) { V.s = Math.max(0.4, ns); labelsDirty = true; return; }
+    if (V.walk) { V.s = Math.max(V3.on ? 0.22 : 0.4, ns); labelsDirty = true; return; }
     V.x = gesture.vx; V.y = gesture.vy; V.s = gesture.s; const [wx, wy] = toWorld(gesture.mid[0], gesture.mid[1]);
     const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; V.s = ns; keepPoint(wx, wy, mid[0], mid[1]); V.follow = false; labelsDirty = true; draw(); return; }
   const dx = ex - gesture.sx, dy = ey - gesture.sy;
@@ -351,17 +362,22 @@ const endPtr = e => { const g = gesture; ptrs.delete(e.pointerId);
   if (ptrs.size === 0) gesture = null; else if (g && g.kind === 'pinch') { const [p] = [...ptrs.values()]; gesture = { kind: 'pan', sx: p[0], sy: p[1], vx: V.x, vy: V.y }; } };
 cv.addEventListener('pointerup', endPtr); cv.addEventListener('pointercancel', e => { ptrs.delete(e.pointerId); gesture = null; });
 cv.addEventListener('wheel', e => { e.preventDefault(); const [ex, ey] = localXY(e); zoomAt(ex, ey, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
-function zoomAt(sx, sy, f) { const [wx, wy] = toWorld(sx, sy); V.s = clampScale(V.s * f); if (V.walk) V.s = Math.max(0.4, V.s); else keepPoint(wx, wy, sx, sy); labelsDirty = true; draw(); }
+function zoomAt(sx, sy, f) { const [wx, wy] = toWorld(sx, sy); V.s = clampScale(V.s * f); if (V.walk) V.s = Math.max(V3.on ? 0.22 : 0.4, V.s); else keepPoint(wx, wy, sx, sy); labelsDirty = true; draw(); }
 document.getElementById('zin').onclick = () => { const [ax, ay] = anchor(); zoomAt(ax, ay, 1.6); };
 document.getElementById('zout').onclick = () => { const [ax, ay] = anchor(); zoomAt(ax, ay, 1 / 1.6); };
 const walkBtn = document.getElementById('walkview');
 function setWalkView(on) {
-  V.walk = on; V.look = 0; document.getElementById('app').classList.toggle('walk', on); walkBtn.classList.toggle('on', on); walkBtn.setAttribute('aria-pressed', on);
-  if (on) { V.follow = true; if (V.s < 1.1) V.s = 1.6; const fx = S.real && S.real.pos ? S.real.pos : [P.x, P.y]; V.x = fx[0]; V.y = fx[1]; }
-  else { V.rot = 0; }
-  resize(); try { localStorage.setItem('berlin-walkview', on ? '1' : '0'); } catch (e) {}
+  on = !!on && S.mode === 'play' && init3D();
+  FP.on = on; V.walk = false; V.look = 0; V3.on = false;
+  const appEl = document.getElementById('app'); appEl.classList.toggle('fps', on); appEl.classList.remove('walk', 'three');
+  walkBtn.classList.toggle('on', on); walkBtn.setAttribute('aria-pressed', on); walkBtn.setAttribute('aria-label', on ? 'Show the big map' : 'Walk the streets in 3D');
+  if (on) { V.mapS = V.s; V.s = 0.5; FP.yaw = V.head ?? FP.yaw; FP.pitch = -0.05; P.street = null; }
+  else { V.rot = 0; V.s = Math.max(0.5, V.mapS || 0.9); V.x = P.x; V.y = P.y; FP.prompt = null; const pe = document.getElementById('prompt'); if (pe) pe.hidden = true; }
+  resize(); showMissionSheet();
 }
-walkBtn.onclick = () => { setWalkView(!V.walk); toast(V.walk ? 'Walking view: the way we face is up' : 'Map view: north is up'); };
+const prefFP = () => { try { return localStorage.getItem('berlin-walkview') !== '0'; } catch (e) { return true; } };
+function toggleMap() { if (S.mode !== 'play' || P.train) return; const on = !FP.on; setWalkView(on); try { localStorage.setItem('berlin-walkview', on ? '1' : '0'); } catch (e) {} }
+walkBtn.onclick = () => toggleMap();
 document.getElementById('recenter').onclick = () => { V.look = 0; if (S.real && S.real.pos) { V.x = S.real.pos[0]; V.y = S.real.pos[1]; } else { V.x = P.x; V.y = P.y; } V.follow = true; if (V.s < 0.5) V.s = 0.9; labelsDirty = true; draw(); };
 document.getElementById('menuBtn').onclick = () => openMenu();
 
@@ -372,6 +388,7 @@ function hitTest(sx, sy) {
   return best;
 }
 function onTap(sx, sy) {
+  if (FP.on) { toggleMap(); return; }
   const hit = hitTest(sx, sy);
   if (S.mode !== 'play') { if (hit && hit.kind === 'place') showPlaceCard(hit.p, false); return; }
   if (P.train) { toast('We’re on the train. Choose a stop below to get off.'); return; }
@@ -487,7 +504,7 @@ function showNextWord() {
 }
 const learnNext = list => { const w = list.find(x => !save.words[x]); if (w) learn(w); };
 function toast(msg, ms = 2600) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; pushToast(t, ms); }
-function pushToast(el, ms) { const box = document.getElementById('toasts'); box.style.bottom = (sheetEl.hidden ? 20 : sheetEl.offsetHeight + 12) + 'px'; box.appendChild(el); while (box.children.length > 3) box.firstChild.remove(); setTimeout(() => el.remove(), ms); }
+function pushToast(el, ms) { const box = document.getElementById('toasts'); box.style.bottom = (FP.on && sheetEl.hidden ? 96 : sheetEl.hidden ? 20 : sheetEl.offsetHeight + 12) + 'px'; box.appendChild(el); while (box.children.length > 3) box.firstChild.remove(); setTimeout(() => el.remove(), ms); }
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // ------------------------------------------------------------------ places
@@ -536,7 +553,7 @@ function stationSheet() {
     <div class="row">${s.onMap ? '<button class="btn ghost" id="leaveSt">Leave the station (Ausgang)</button>' : ''}${hintBtn()}</div>`);
   learn('Richtung');
   document.querySelectorAll('.dir').forEach(b => b.onclick = () => { const [l, d] = dirs[+b.dataset.k]; board(l, d); });
-  const lv = document.getElementById('leaveSt'); if (lv) lv.onclick = () => { learn('Ausgang'); addMinutes(STAIRS); P.at = { kind: 'street', node: s.node }; P.x = NX[s.node]; P.y = NY[s.node]; showMissionSheet(); };
+  const lv = document.getElementById('leaveSt'); if (lv) lv.onclick = () => { learn('Ausgang'); addMinutes(STAIRS); P.at = { kind: 'street', node: s.node }; P.x = NX[s.node]; P.y = NY[s.node]; if (FP.on) FP.yaw = Math.atan2(NY[s.node] - s.y, NX[s.node] - s.x) || FP.yaw; showMissionSheet(); };
   if (scene) document.getElementById('sceneGo').onclick = () => doScene(scene);
   wireHint();
 }
@@ -550,7 +567,7 @@ function doScene(p) {
   document.getElementById('sceneBack').onclick = () => { addMinutes(p.scene.walk); setWarmth(S.warmth - p.scene.walk * 0.8); if (S.mode === 'play' && !S.done) stationSheet(); };
 }
 function board(l, dir) {
-  hideStreetSign();
+  hideStreetSign(); if (FP.on) { FP.resume = true; setWalkView(false); }
   const s = ST[P.at.st], i = s.lines.find(e => e.line === l).i;
   P.train = { line: l, dir, i, t: 0, wait: WAIT(l), getOff: false, phase: 'wait', stopT: 0 };
   learn(l.kind === 'U' ? 'Zurückbleiben, bitte!' : 'Einsteigen, bitte');
@@ -592,6 +609,7 @@ function stepTrain(dtReal) {
     if (T.getOff) T.stopT = 0.5; rideSheet(); }
 }
 function alight() { const T = P.train, name = T.line.stops[T.i]; P.train = null; learn('aussteigen');
+  if (FP.resume && ST[name].onMap) { FP.resume = false; const s = ST[name]; P.x = NX[s.node]; P.y = NY[s.node]; setWalkView(true); P.x = s.x; P.y = s.y; }
   if (ST[name].lines.length > 1) learn('Umsteigen');
   enterStation(name); }
 
@@ -601,11 +619,11 @@ function nextGoal() { if (!S.mission) return null; const left = S.mission.goal.f
 function startMission(m) {
   S.mode = 'play'; S.mission = m; S.day = m.day; S.min = m.time; S.temp = m.temp; S.rain = m.rain; S.warmth = 100; S.coldShown = false; S.done = false;
   S.visited = new Set(); S.paused = 0; S.hint = null; S.hintUsed = false; P.train = null; P.path = null;
-  if (m.start.place) { const p = PL[m.start.place]; P.at = { kind: 'street', node: p.node }; P.x = p.x; P.y = p.y; S.visited.add(p.id); }
+  if (m.start.place) { const p = PL[m.start.place]; P.at = { kind: 'street', node: p.node }; P.x = NX[p.node]; P.y = NY[p.node]; S.visited.add(p.id); FP.yaw = Math.atan2(p.y - P.y, p.x - P.x) + Math.PI; }
   else { const s = ST[m.start.station]; P.x = s.x; P.y = s.y; P.at = { kind: 'street', node: s.node }; P.x = NX[s.node]; P.y = NY[s.node]; }
   const plan = bestPlan(playerGraphNode(), m.goal); S.par = Math.max(4, plan.mins); S.started = S.min;
   V.x = P.x; V.y = P.y; V.s = 0.9; V.follow = true; labelsDirty = true;
-  hideOverlay(); hideStreetSign();
+  hideOverlay(); hideStreetSign(); if (typeof setHintPath === 'function') setHintPath(null); setWalkView(prefFP());
   const d0 = DAYS[m.day]; learn(m.time < 11 * 60 ? 'Guten Morgen' : m.time < d0.set ? 'Guten Tag' : 'Guten Abend'); learn('Uhr');
   if (m.rain) learn('Nieselregen'); if (isDark()) learn('dunkel');
   m.words.slice(0, 2).forEach(learn);
@@ -617,8 +635,8 @@ function startMission(m) {
 }
 function startExplore() {
   hideStreetSign(); S.mode = 'play'; S.mission = null; S.day = 1; S.min = 10 * 60; S.temp = 4; S.rain = false; S.warmth = 100; S.visited = new Set(['H']); S.hint = null; S.done = false;
-  const p = PL.H; P.at = { kind: 'street', node: p.node }; P.x = p.x; P.y = p.y; P.train = null; P.path = null;
-  V.x = P.x; V.y = P.y; V.s = 0.7; labelsDirty = true; hideOverlay(); showMissionSheet(); updateHud();
+  const p = PL.H; P.at = { kind: 'street', node: p.node }; P.x = NX[p.node]; P.y = NY[p.node]; P.train = null; P.path = null;
+  V.x = P.x; V.y = P.y; V.s = 0.7; labelsDirty = true; hideOverlay(); setHintPath(null); setWalkView(prefFP()); showMissionSheet(); updateHud();
 }
 function checkMission() {
   const m = S.mission; if (!m || S.done) return;
@@ -649,7 +667,7 @@ function hintBtn() { return S.mission && !S.done ? '<button class="btn ghost" id
 function wireHint() { const b = document.getElementById('hintBtn'); if (!b) return; b.onclick = () => {
   const left = S.mission.goal.filter(g => !S.visited.has(g)); if (!left.length) return;
   const src = P.at.kind === 'station' || P.at.kind === 'offmap' ? stIndex[P.at.st] : (P.path ? P.path[Math.min(P.pathI + 1, P.path.length - 1)] : P.at.node);
-  const plan = bestPlan(src, left); S.hintUsed = true; learn('Wo ist …?'); learn('Entschuldigung'); learn('Sprechen Sie Englisch?'); const ds = plan.legs.map(describeLeg); S.hint = ds.map(d => d.poly.map(([x, y]) => [x, y]));
+  const plan = bestPlan(src, left); S.hintUsed = true; setTimeout(() => setHintPath(S.hint), 0); learn('Wo ist …?'); learn('Entschuldigung'); learn('Sprechen Sie Englisch?'); const ds = plan.legs.map(describeLeg); S.hint = ds.map(d => d.poly.map(([x, y]) => [x, y]));
   const steps = plan.legs.flatMap((lg, k) => ds[k].steps.concat([{ kind: 'arrive', p: lg.p }]));
   sheet(`<div class="eyebrow">Quickest way from here · about ${Math.round(plan.mins)} min</div><ol style="margin:6px 0 12px;padding-left:20px;line-height:1.5">${steps.map(stepHtml).join('')}</ol>
     <p class="muted">The dotted yellow line shows it on the map.</p><div class="row"><button class="btn primary" id="hintOk">Got it</button></div>`);
@@ -662,9 +680,18 @@ function compassInner(g) {
   const shown = ang + V.rot * 180 / Math.PI; // in walking view the arrow points the way to go on screen
   return `<svg viewBox="0 0 24 24" style="transform:rotate(${shown}deg)"><path d="M12 2l6 18-6-4-6 4z" fill="#f3c22f"/></svg><span>${d > 950 ? (d / 1000).toFixed(1) + ' km' : Math.round(d / 10) * 10 + ' m'} ${dn} <span class="muted" style="font-weight:500">(${DE[dn]})</span> to ${esc(g.name)}</span>`;
 }
+const chipEl = document.getElementById('objective');
 function showMissionSheet() {
+  if (chipEl) chipEl.hidden = true;
   if (S.mode !== 'play' || P.train) return;
   if (P.at.kind === 'offmap') return stationSheet();
+  if (FP.on) {
+    hideSheet(); if (!chipEl) return; const m = S.mission, g = nextGoal();
+    const head = m ? (S.done ? '' : `<div class="eyebrow">${esc(m.title)} · ${m.goal.filter(id => S.visited.has(id)).length}/${m.goal.length}</div>`) : `<div class="eyebrow">Explore · ${Object.keys(save.found).length} of ${PLACES.length} found</div>`;
+    chipEl.innerHTML = `${head}${g ? `<div class="compass" id="compass">${compassInner(g)}</div>` : ''}
+      <div class="row chipbtns">${m && !S.done ? '<button class="btn ghost small" id="hintBtn"><span class="btnX">X</span> Quickest way</button>' : ''}<button class="btn ghost small" id="mapBtn"><span class="btnY">Y</span> Map</button><button class="btn ghost small" id="toMenu">Menu</button></div>`;
+    chipEl.hidden = false; wireHint(); document.getElementById('mapBtn').onclick = toggleMap; document.getElementById('toMenu').onclick = () => openMenu(m ? 'missions' : undefined); return;
+  }
   const m = S.mission;
   if (!m) { const found = Object.keys(save.found).length;
     sheet(`<div class="eyebrow">Explore · ${found} of ${PLACES.length} places found</div><h2>Wander anywhere</h2>
@@ -682,7 +709,7 @@ function showMissionSheet() {
 
 // ------------------------------------------------------------------ sheet + overlay
 const sheetEl = document.getElementById('sheet'), ov = document.getElementById('overlay');
-function sheet(html) { sheetEl.hidden = false; sheetEl.innerHTML = html; const box = document.getElementById('toasts'); if (box) box.style.bottom = (sheetEl.offsetHeight + 12) + 'px'; }
+function sheet(html) { if (chipEl) chipEl.hidden = true; sheetEl.hidden = false; sheetEl.innerHTML = html; const box = document.getElementById('toasts'); if (box) box.style.bottom = (sheetEl.offsetHeight + 12) + 'px'; }
 function hideSheet() { sheetEl.hidden = true; }
 function hideOverlay() { ov.hidden = true; }
 const fmt = m => { m = ((Math.round(m) % 1440) + 1440) % 1440; return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
@@ -702,6 +729,8 @@ function openMenu(tab) {
       <button class="btn" id="mWords">German words <small>${words} of ${Object.keys(WORDS).length} learned</small></button>
       <button class="btn" id="mReal">We’re in Berlin <small>show where we really are</small></button>
     </div>
+    <div class="sec">Controls</div>
+    <p class="small-print" style="margin-top:0">With the controller: left stick walks, right stick looks around, hold RT to walk faster. Ⓐ goes into a station or looks at a place, Ⓑ goes back, Ⓧ shows the quickest way, Ⓨ switches between the street and the big map, Start opens this menu. Without a controller: drag on the left side of the screen to walk and anywhere else to look; tap the round map for the big map. Hold the phone sideways.</p>
     <p class="small-print">Map data © OpenStreetMap contributors (ODbL), downloaded 15 Nov 2026. Train lines and stops are real; times are estimates. Christmas market dates and hours are typical and change each year, so check before going. Progress is saved on this phone only.</p>
     ${(window.__offlineReady || (navigator.serviceWorker && navigator.serviceWorker.controller)) ? '<p class="small-print" style="color:var(--good);margin-top:6px">✓ Saved on this phone. The game works without internet.</p>' : ''}
     <div class="row" style="margin-top:8px"><button class="btn ghost" id="mReset">Reset progress</button></div></div>`;
@@ -738,7 +767,7 @@ function wordsList() {
 
 // ------------------------------------------------------------------ real mode (GPS)
 function startReal() {
-  hideOverlay(); S.mode = 'real'; S.real = { pos: null, acc: 0, watch: null, err: null }; S.min = new Date().getHours() * 60 + new Date().getMinutes();
+  if (FP.on) setWalkView(false); hideOverlay(); S.mode = 'real'; S.real = { pos: null, acc: 0, watch: null, err: null }; S.min = new Date().getHours() * 60 + new Date().getMinutes();
   V.x = PL.H.x; V.y = PL.H.y; V.s = 0.6; labelsDirty = true;
   if (!('geolocation' in navigator)) { S.real.err = 'This phone or browser can’t share its location.'; realSheet(); return; }
   try {
@@ -785,6 +814,7 @@ let last = performance.now(), settleT = 0, walkLayoutT = 0, turnT = 0;
 function loop(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   let moving = false;
+  if (FP.on && S.mode === 'play' && !P.train) stepFP(dt); else if (FP.ok && FP.inited) pollPad();
   if (S.mode === "play" && ov.hidden) {
     if (P.path) { stepWalk(dt); moving = true; }
     if (P.train) { stepTrain(dt); moving = true; }
@@ -802,6 +832,7 @@ function loop(now) {
   turnT -= dt; if (turnT <= 0) { turnT = 0.25; updateTurn(); }
   if (moving && V.follow && !V.walk) { const [sx, sy] = toScreen(P.x, P.y); const mx = W * 0.25, my = H * 0.22;
     if (sx < mx || sx > W - mx || sy < my + 60 || sy > H - my - sheetEl.offsetHeight * 0.6) { V.x += (P.x - V.x) * 0.08; V.y += (P.y - V.y) * 0.08; settleT = 0.15; } }
+  if (FP.on) { V.x = P.x; V.y = P.y; V.rot = -Math.PI / 2 - FP.yaw; V.head = FP.yaw; walkLayoutT -= dt; if (walkLayoutT <= 0) { labelsDirty = true; walkLayoutT = 0.4; } renderFP(dt); }
   if (settleT > 0) { settleT -= dt; if (settleT <= 0) labelsDirty = true; }
   if (S.rain && !reduceMotion) for (const d of drops) { d.y += d.v * dt * 1.3; d.x -= d.v * dt * 0.25; if (d.y > 1) { d.y = 0; d.x = Math.random() * 1.1; } }
   updateHud(); updateSky();
@@ -814,8 +845,7 @@ window.addEventListener('resize', resize);
 resize();
 V.x = PL.H.x; V.y = PL.H.y - 300; V.s = 0.16; S.day = 1; S.min = 16 * 60 + 40;
 openMenu(); hideSheet();
-try { if (localStorage.getItem('berlin-walkview') === '1') setWalkView(true); } catch (e) {}
 window.addEventListener('offline-ready', () => { if (!ov.hidden && ov.querySelector('.title-hero')) openMenu(); });
 requestAnimationFrame(loop);
-window.__game = { S, P, V, PL, ST, LINES, bestPlan, describeLeg, startMission, MISSIONS };
+window.__game = { FP, S, P, V, PL, ST, LINES, bestPlan, describeLeg, startMission, MISSIONS };
 })();

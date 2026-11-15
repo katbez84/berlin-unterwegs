@@ -2,7 +2,8 @@
 import os
 R = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 rd = lambda p: open(os.path.join(R, p), encoding='utf8').read()
-html = rd('src/shell.html') + '\n<script>\nconst MAP_DATA = ' + rd('data/map.json') + ';\n' + rd('src/words.js') + '\n' + rd('src/places.js') + '\n' + rd('src/game.js') + '\n</script>\n'
+html = (rd('src/shell.html') + '\n<script>\nconst MAP_DATA = ' + rd('data/map.json') + ';\nMAP_DATA.bld = ' + rd('data/buildings.json') + ';\n'
+        + rd('src/words.js') + '\n' + rd('src/places.js') + '\n' + rd('src/game.js').replace('/*VIEW3D*/', rd('src/view3d.js')) + '\n</script>\n')
 os.makedirs(os.path.join(R, 'dist'), exist_ok=True)
 out = os.path.join(R, 'dist', 'index.html')
 open(out, 'w', encoding='utf8').write(html)

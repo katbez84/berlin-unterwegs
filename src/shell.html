@@ -126,6 +126,28 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--sign);
 /* walking view: the map tilts back like a navigation app, sky above the horizon */
 #sky { position: absolute; inset: 0; background: var(--night); display: none; }
 #app.walk #sky { display: block; }
+#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: none; touch-action: none; }
+/* first person: 3D fills the screen, the 2D map shrinks to a round minimap */
+#app.fps #gl { display: block; }
+#app.fps #map { left: auto; right: max(12px, env(safe-area-inset-right, 0px)); top: calc(env(safe-area-inset-top, 0px) + 64px); width: 128px; height: 128px; border-radius: 50%; border: 3px solid var(--sign); box-shadow: 0 3px 12px rgb(0 0 0 / .4); z-index: 3; }
+#app.fps #zin, #app.fps #zout, #app.fps #recenter, #app.fps #turn { display: none; }
+#app.fps #ctrls { top: calc(env(safe-area-inset-top, 0px) + 202px); }
+#objective { position: absolute; z-index: 4; left: max(12px, env(safe-area-inset-left, 0px)); top: calc(env(safe-area-inset-top, 0px) + 108px); max-width: min(360px, calc(100% - 164px));
+  background: color-mix(in srgb, var(--panel) 90%, transparent); border-radius: 12px; padding: 9px 12px; box-shadow: 0 2px 12px rgb(0 0 0 / .35); }
+#objective .compass { font-size: 16px; margin: 4px 0 6px; }
+#objective .compass svg { width: 22px; height: 22px; }
+.btn.small { min-height: 34px; padding: 5px 10px; font-size: 13px; }
+.chipbtns { gap: 6px; }
+.btnA, .btnX, .btnY { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; font-family: var(--display); font-weight: 700; font-size: 13px; color: #fff; margin-right: 4px; }
+.btnA { background: #2f9a4a; } .btnX { background: #2f6fd0; } .btnY { background: #c9a227; color: #222; }
+#app:not(.pad) .btnX, #app:not(.pad) .btnY { display: none; }
+#prompt { position: absolute; z-index: 5; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom, 0px) + 34px); border: 0; cursor: pointer;
+  background: var(--sign); color: var(--sign-ink); font-weight: 600; font-size: 16px; padding: 10px 18px 10px 12px; border-radius: 999px; box-shadow: 0 4px 16px rgb(0 0 0 / .4); display: flex; align-items: center; gap: 4px; max-width: calc(100% - 32px); }
+#app:not(.pad) #prompt .btnA { display: none; }
+#stick { position: absolute; z-index: 4; width: 110px; height: 110px; border-radius: 50%; border: 2px solid rgb(255 255 255 / .5); background: rgb(20 26 40 / .25); display: none; pointer-events: none; }
+#stick i { position: absolute; left: 35px; top: 35px; width: 40px; height: 40px; border-radius: 50%; background: rgb(255 255 255 / .7); }
+#app.fps:not(.pad) #stick.active { display: block; }
+#app.three #gl { display: block; }
 #app.walk #map { left: -35%; width: 170%; top: -55%; height: 155%; transform-origin: 50% 100%; transform: perspective(1400px) rotateX(42deg); }
 .iconbtn.on { background: var(--sign) !important; }
 .iconbtn.on svg { stroke: var(--sign-ink); }
@@ -151,6 +173,7 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--sign);
 
 <div id="app">
   <div id="sky"></div>
+  <canvas id="gl" aria-hidden="true"></canvas>
   <canvas id="map" aria-label="Map of central Berlin"></canvas>
   <header id="hud">
     <div><div class="clock" id="clock">15:10</div><div class="day" id="day">Sun 22 Nov</div></div>
@@ -166,7 +189,11 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--sign);
   </div>
   <div id="streetsign" hidden></div>
   <div id="turn" hidden></div>
+  <div id="objective" hidden></div>
+  <button id="prompt" hidden></button>
+  <div id="stick" aria-hidden="true"><i></i></div>
   <div id="toasts" aria-live="polite"></div>
   <section id="sheet" aria-live="polite"></section>
   <section id="overlay" hidden></section>
 </div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
